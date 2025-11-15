@@ -1,0 +1,158 @@
+#include <Wire.h>
+#include "Adafruit_VL53L0X.h"
+
+// IR sensor
+#define IR_SENSOR 2             // IR sensor OUT pin
+
+// Container measurement motor (via L298N)
+#define MOTOR_INT1 3            // L298N IN1
+#define MOTOR_INT2 4            // L298N IN2
+#define MOTOR_ENA 5             // L298N ENA (PWM)
+
+// Pump motor (via L298N)
+#define PUMP_INT3 6             // L298N IN3
+#define PUMP_INT4 7             // L298N IN4
+
+// Water flow indicator (LED)
+#define WATER_FLOW_PIN 13       // Status LED (optional)
+
+// Motor and container calibration
+#define MOTOR_SPEED 1.667       // Speed in cm/sec
+#define FRAME_SIZE 33           // Container Frame Size in cm
+
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+bool measuring = false;
+bool returning = false;
+bool waterFlowing = false;
+bool pumping = false;
+
+int distance;
+float remainingSpace;
+float targetFillLevel = 0;
+
+void setup() {
+  pinMode(IR_SENSOR, INPUT);
+
+  // Setup motor control pins
+  pinMode(MOTOR_INT1, OUTPUT);
+  pinMode(MOTOR_INT2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+
+  pinMode(PUMP_INT3, OUTPUT);
+  pinMode(PUMP_INT4, OUTPUT);
+
+  pinMode(WATER_FLOW_PIN, OUTPUT);
+
+  Serial.begin(9600);
+  while (!Serial) { delay(1); }
+
+  // Initialize LiDAR
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while (1);
+  }
+  Serial.println(F("VL53L0X LiDAR sensor ready!"));
+}
+
+void loop() {
+  int irStatus = digitalRead(IR_SENSOR);
+
+  // Start measuring container when object is detected
+  if (irStatus == LOW && !returning) {
+    if (!measuring) {
+      startTime = millis();
+      measuring = true;
+    }
+
+    // Motor DOWN movement
+    digitalWrite(MOTOR_INT1, LOW);
+    digitalWrite(MOTOR_INT2, HIGH);
+    analogWrite(MOTOR_ENA, 255);
+  }
+
+  // Stop measuring when object leaves
+  if (irStatus == HIGH && measuring) {
+    measuring = false;
+
+    // Stop motor
+    digitalWrite(MOTOR_INT1, LOW);
+    digitalWrite(MOTOR_INT2, LOW);
+    analogWrite(MOTOR_ENA, 0);
+    delay(100);
+
+    endTime = millis();
+    unsigned long travelTime = endTime - startTime;
+    float timeTaken = travelTime / 1000.0;
+    float containerHeight = MOTOR_SPEED * timeTaken;
+
+    Serial.print("Time Taken (Downward): ");
+    Serial.print(timeTaken);
+    Serial.println(" sec");
+
+    Serial.print("Detected Container Height: ");
+    Serial.print(containerHeight);
+    Serial.println(" cm");
+
+    remainingSpace = FRAME_SIZE - containerHeight + 1;
+    Serial.print("Remaining Space: ");
+    Serial.print(remainingSpace);
+    Serial.println(" cm");
+
+    // ✅ Corrected: stop 2 cm before full
+    targetFillLevel = FRAME_SIZE - containerHeight + 2;
+    Serial.print("Target Fill Level (LiDAR Reference): ");
+    Serial.print(targetFillLevel);
+    Serial.println(" cm");
+
+    pumping = true;
+    delay(1000);
+  }
+
+  // LiDAR distance measurement
+  VL53L0X_RangingMeasurementData_t measure;
+  lox.rangingTest(&measure, false);
+
+  if (measure.RangeStatus != 4) {
+    distance = measure.RangeMilliMeter / 10;
+    Serial.print("LiDAR Distance: ");
+    Serial.print(distance);
+    Serial.println(" cm");
+  } else {
+    Serial.println("LiDAR out of range");
+    distance = 200; // Default/fallback
+  }
+
+  // Optional visual feedback with LED
+  if (distance >= remainingSpace && !waterFlowing) {
+    digitalWrite(WATER_FLOW_PIN, HIGH);
+    waterFlowing = true;
+    Serial.println("Water Flow Started (LED ON)");
+  }
+
+  if (distance < remainingSpace && waterFlowing) {
+    digitalWrite(WATER_FLOW_PIN, LOW);
+    waterFlowing = false;
+    Serial.println("Water Flow Stopped (LED OFF)");
+  }
+
+  // Pump control
+  if (pumping) {
+    if (distance > targetFillLevel) {
+      // Pump ON
+      digitalWrite(PUMP_INT3, LOW);
+      digitalWrite(PUMP_INT4, HIGH);
+      Serial.println("Pump ON");
+    } else {
+      // Pump OFF
+      digitalWrite(PUMP_INT3, LOW);
+      digitalWrite(PUMP_INT4, LOW);
+      pumping = false;
+      Serial.println("Pump OFF - Target Reached");
+    }
+  }
+
+  delay(500);
+}

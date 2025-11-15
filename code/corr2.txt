@@ -1,0 +1,118 @@
+#include <Wire.h>
+#include "Adafruit_VL53L0X.h"
+
+#define IR_SENSOR 2             // IR sensor OUT pin
+#define MOTOR_INT1 3            // L298N IN1
+#define MOTOR_INT2 4            // L298N IN2
+#define MOTOR_ENA 5             // L298N ENA (PWM)
+#define PUMP_INT3 6             // L298N IN3 (Pump)
+#define PUMP_INT4 7             // L298N IN4 (Pump)
+#define WATER_FLOW_PIN 13       // Status LED
+
+#define MOTOR_SPEED 1.667       // Speed in cm/sec
+#define FRAME_SIZE 37           // Container Frame Size in cm
+
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+bool measuring = false;
+bool pumping = false;
+bool systemActive = true;
+
+int distance;
+float remainingSpace;
+float targetFillLevel = 0;
+
+void setup() {
+  pinMode(IR_SENSOR, INPUT);
+  pinMode(MOTOR_INT1, OUTPUT);
+  pinMode(MOTOR_INT2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+  pinMode(PUMP_INT3, OUTPUT);
+  pinMode(PUMP_INT4, OUTPUT);
+  pinMode(WATER_FLOW_PIN, OUTPUT);
+
+  Serial.begin(9600);
+  while (!Serial) { delay(1); }
+
+  if (!lox.begin()) {
+    Serial.println(F("Failed to boot VL53L0X"));
+    while (1);
+  }
+  Serial.println(F("System Ready - Waiting for container..."));
+}
+
+void loop() {
+  if (!systemActive) return;
+
+  int irStatus = digitalRead(IR_SENSOR);
+
+  // Measurement phase
+  if (irStatus == LOW && !measuring) {
+    startTime = millis();
+    measuring = true;
+    Serial.println("Container detected - measuring started");
+    digitalWrite(MOTOR_INT1, LOW);
+    digitalWrite(MOTOR_INT2, HIGH);
+    // digitalWrite(MOTOR_INT1, HIGH);
+    // digitalWrite(MOTOR_INT2, LOW);
+    analogWrite(MOTOR_ENA, 255);
+  }
+
+  // End measurement
+  if (irStatus == HIGH && measuring) {
+    measuring = false;
+    digitalWrite(MOTOR_INT1, LOW);
+    digitalWrite(MOTOR_INT2, LOW);
+    analogWrite(MOTOR_ENA, 0);
+    delay(100);
+
+    endTime = millis();
+    float containerHeight = MOTOR_SPEED * (endTime - startTime) / 1000.0;
+    targetFillLevel = FRAME_SIZE - containerHeight + 3;
+    
+    Serial.println("\n--- Measurement Complete ---");
+    Serial.print("Target Fill Level: ");
+    Serial.print(targetFillLevel);
+    Serial.println(" cm");
+    
+    pumping = true;
+    Serial.println("Pumping started (LiDAR values below)");
+  }
+
+  // Pumping phase with continuous LiDAR output
+  if (pumping) {
+    VL53L0X_RangingMeasurementData_t measure;
+    lox.rangingTest(&measure, false);
+    
+    if (measure.RangeStatus != 4) {
+      distance = measure.RangeMilliMeter / 10;
+      Serial.print("Current Level: ");
+      Serial.print(distance);
+      Serial.println(" cm");
+      
+      if (distance <= targetFillLevel) {
+        stopSystem();
+      } else {
+        digitalWrite(PUMP_INT3, LOW);
+        digitalWrite(PUMP_INT4, HIGH);
+        digitalWrite(WATER_FLOW_PIN, HIGH);
+      }
+    }
+  }
+
+  delay(500);
+}
+
+void stopSystem() {
+  digitalWrite(PUMP_INT3, LOW);
+  digitalWrite(PUMP_INT4, LOW);
+  digitalWrite(WATER_FLOW_PIN, LOW);
+  pumping = false;
+  systemActive = false;
+  
+  Serial.println("\n--- Process Complete ---");
+  Serial.println("Target reached - System stopped");
+  Serial.println("Reset Arduino to restart");
+}

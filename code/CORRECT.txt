@@ -1,0 +1,111 @@
+#define IR_SENSOR 2             // IR sensor OUT pin
+#define MOTOR_IN1 3             // Motor IN1
+#define MOTOR_IN2 4             // Motor IN2
+#define MOTOR_ENA 5             // Motor ENA (PWM)
+#define ULTRASONIC_TRIGGER 6    // Ultrasonic Trigger Pin
+#define ULTRASONIC_ECHO 7       // Ultrasonic Echo Pin
+#define WATER_FLOW_PIN 13       // Water Flow/LED Pin (LED near GND on Uno)
+
+// Motor and container calibration
+#define MOTOR_SPEED 1.667       // Speed in cm/sec
+#define FRAME_SIZE 33           // Container Frame Size in cm
+
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+bool measuring = false;
+bool returning = false;
+bool waterFlowing = false;
+
+// Ultrasonic sensor
+long duration;
+int distance;
+float remainingSpace;
+
+void setup() {
+  pinMode(IR_SENSOR, INPUT);
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+  pinMode(ULTRASONIC_TRIGGER, OUTPUT);
+  pinMode(ULTRASONIC_ECHO, INPUT);
+  pinMode(WATER_FLOW_PIN, OUTPUT);
+
+  Serial.begin(9600);
+}
+
+void loop() {
+  int irStatus = digitalRead(IR_SENSOR);
+
+  // Move while object is detected
+  if (irStatus == LOW && !returning) {
+    if (!measuring) {
+      startTime = millis();
+      measuring = true;
+    }
+    digitalWrite(MOTOR_IN1, HIGH);    // DOWNWARD movement
+    digitalWrite(MOTOR_IN2, LOW);
+    digitalWrite(MOTOR_IN1, LOW);    // UPWARD movement
+    digitalWrite(MOTOR_IN2, HIGH);
+    analogWrite(MOTOR_ENA, 255);
+  }
+
+  // Stop when object is no longer detected
+  if (irStatus == HIGH && measuring) {
+    measuring = false;
+
+    // Immediately stop motor
+    digitalWrite(MOTOR_IN1, LOW);
+    digitalWrite(MOTOR_IN2, LOW);
+    analogWrite(MOTOR_ENA, 0);
+    delay(100);  // Stabilize
+
+    endTime = millis();  // Capture stop time
+    unsigned long travelTime = endTime - startTime;
+    float timeTaken = travelTime / 1000.0;
+    float containerHeight = MOTOR_SPEED * timeTaken;
+
+    Serial.print("Time Taken (Downward): ");
+    Serial.print(timeTaken);
+    Serial.println(" sec");
+
+    Serial.print("Detected Container Height: ");
+    Serial.print(containerHeight);
+    Serial.println(" cm");
+
+    remainingSpace = FRAME_SIZE - containerHeight + 1;
+    Serial.print("Remaining Space: ");
+    Serial.print(remainingSpace);
+    Serial.println(" cm");
+
+    delay(1000); // Pause before distance check
+  }
+
+  // Trigger ultrasonic sensor
+  digitalWrite(ULTRASONIC_TRIGGER, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ULTRASONIC_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ULTRASONIC_TRIGGER, LOW);
+
+  duration = pulseIn(ULTRASONIC_ECHO, HIGH);
+  distance = duration * 0.034 / 2;
+
+  Serial.print("Ultrasonic Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Water flow control
+  if (distance >= remainingSpace && !waterFlowing) {
+    digitalWrite(WATER_FLOW_PIN, HIGH);  // Start water flow (LED ON)
+    waterFlowing = true;
+    Serial.println("Water Flow Started (LED ON)");
+  }
+
+  if (distance < remainingSpace && waterFlowing) {
+    digitalWrite(WATER_FLOW_PIN, LOW);   // Stop water flow (LED OFF)
+    waterFlowing = false;
+    Serial.println("Water Flow Stopped (LED OFF)");
+  }
+
+  delay(500);  // Smoother sensor readings
+}

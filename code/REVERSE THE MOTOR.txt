@@ -1,0 +1,62 @@
+#define IR_SENSOR 2         // IR sensor OUT pin
+#define MOTOR_IN1 3         // Motor IN1
+#define MOTOR_IN2 4         // Motor IN2
+#define MOTOR_ENA 5         // Motor ENA (PWM)
+
+// Adjust this based on your mechanism
+#define MOTOR_SPEED 1.667   // Speed in cm/sec (based on lead screw pitch and RPM)
+
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+bool measuring = false;
+bool returning = false;
+
+void setup() {
+  pinMode(IR_SENSOR, INPUT);
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+  int irStatus = digitalRead(IR_SENSOR);
+
+  // Going up while detecting object
+  if (irStatus == LOW && !returning) {
+    if (!measuring) {
+      startTime = millis();
+      measuring = true;
+    }
+    digitalWrite(MOTOR_IN1, LOW);       //downward direction
+    digitalWrite(MOTOR_IN2, HIGH);
+    // digitalWrite(MOTOR_IN1, HIGH);  // upward direction
+    // digitalWrite(MOTOR_IN2, LOW);
+    analogWrite(MOTOR_ENA, 255);
+  }
+
+  // Object no longer detected - Stop & calculate
+  if (irStatus == HIGH && measuring) {
+    endTime = millis();
+    measuring = false;
+
+    // Stop upward movement
+    digitalWrite(MOTOR_IN1, LOW);
+    digitalWrite(MOTOR_IN2, LOW);
+    analogWrite(MOTOR_ENA, 0);
+
+    unsigned long travelTime = endTime - startTime;
+    float timeTaken = travelTime / 1000.0; // convert ms to sec
+    float height = MOTOR_SPEED * timeTaken;
+
+    Serial.print("Time taken upward: ");
+    Serial.print(timeTaken);
+    Serial.println(" sec");
+
+    Serial.print("Height of Container: ");
+    Serial.print(height);
+    Serial.println(" cm");
+
+    delay(1000); // Pause before return
+  }
+}

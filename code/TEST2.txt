@@ -1,0 +1,153 @@
+#define IR_SENSOR 2             // IR sensor OUT pin
+#define MOTOR_IN1 3             // Motor IN1
+#define MOTOR_IN2 4             // Motor IN2
+#define MOTOR_ENA 5             // Motor ENA (PWM)
+#define ULTRASONIC_TRIGGER 6    // Ultrasonic Trigger Pin
+#define ULTRASONIC_ECHO 7       // Ultrasonic Echo Pin
+#define WATER_FLOW_PIN 13       // Water Flow/LED Pin
+
+// Motor and container calibration
+#define MOTOR_SPEED 1.667       // Speed in cm/sec
+#define FRAME_SIZE 33           // Container Frame Size in cm
+#define CONFIRMATION_COUNT 4    // Number of consistent readings required
+
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+bool measuring = false;
+bool waterFlowing = false;
+float containerHeight = 0;
+float remainingSpace = 0;
+
+// Ultrasonic confirmation system
+int distanceHistory[CONFIRMATION_COUNT];
+int historyIndex = 0;
+bool confirmed = false;
+
+void setup() {
+  pinMode(IR_SENSOR, INPUT);
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+  pinMode(ULTRASONIC_TRIGGER, OUTPUT);
+  pinMode(ULTRASONIC_ECHO, INPUT);
+  pinMode(WATER_FLOW_PIN, OUTPUT);
+
+  // Initialize all outputs to LOW
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+  digitalWrite(MOTOR_ENA, LOW);
+  digitalWrite(WATER_FLOW_PIN, LOW);
+
+  Serial.begin(9600);
+  Serial.println("System Initialized - Ready for Detection");
+}
+
+void loop() {
+  // IR Sensor Detection
+  if (digitalRead(IR_SENSOR) == LOW) {
+    if (!measuring) {
+      startMeasurement();
+    }
+  } else {
+    if (measuring) {
+      stopMeasurement();
+    }
+  }
+
+  // Water Pump Control
+  if (containerHeight > 0) {
+    controlWaterPump();
+  }
+}
+
+void startMeasurement() {
+  startTime = millis();
+  measuring = true;
+  
+  // Start motor UPWARD movement
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, HIGH);
+  analogWrite(MOTOR_ENA, 255);
+  
+  Serial.println("Object Detected - Motor Moving Upward");
+}
+
+void stopMeasurement() {
+  measuring = false;
+  
+  // Stop motor immediately
+  digitalWrite(MOTOR_IN1, LOW);
+  digitalWrite(MOTOR_IN2, LOW);
+  analogWrite(MOTOR_ENA, 0);
+  
+  endTime = millis();
+  float timeTaken = (endTime - startTime) / 1000.0;
+  containerHeight = MOTOR_SPEED * timeTaken;
+  remainingSpace = FRAME_SIZE - containerHeight + 2; // +2cm margin
+
+  Serial.print("Measurement Complete - Time: ");
+  Serial.print(timeTaken);
+  Serial.print("s, Height: ");
+  Serial.print(containerHeight);
+  Serial.print("cm, Remaining: ");
+  Serial.print(remainingSpace);
+  Serial.println("cm");
+
+  // Reset confirmation system
+  for (int i = 0; i < CONFIRMATION_COUNT; i++) {
+    distanceHistory[i] = 0;
+  }
+  historyIndex = 0;
+  confirmed = false;
+
+  delay(1000); // Pause before water control
+}
+
+void controlWaterPump() {
+  // Get ultrasonic distance
+  digitalWrite(ULTRASONIC_TRIGGER, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ULTRASONIC_TRIGGER, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ULTRASONIC_TRIGGER, LOW);
+
+  duration = pulseIn(ULTRASONIC_ECHO, HIGH);
+  int currentDistance = duration * 0.034 / 2;
+
+  // Store distance in history
+  distanceHistory[historyIndex] = currentDistance;
+  historyIndex = (historyIndex + 1) % CONFIRMATION_COUNT;
+
+  Serial.print("Water Level: ");
+  Serial.print(currentDistance);
+  Serial.println("cm");
+
+  // Check if we need to start pumping
+  if (currentDistance > remainingSpace && !waterFlowing) {
+    digitalWrite(WATER_FLOW_PIN, HIGH);
+    waterFlowing = true;
+    Serial.println("Pump ON - Filling");
+    confirmed = false; // Reset confirmation when starting to pump
+  }
+  
+  // Check if we need to stop pumping (with confirmation)
+  if (waterFlowing) {
+    bool shouldStop = true;
+    for (int i = 0; i < CONFIRMATION_COUNT; i++) {
+      if (distanceHistory[i] > remainingSpace) {
+        shouldStop = false;
+        break;
+      }
+    }
+    
+    if (shouldStop && !confirmed) {
+      confirmed = true;
+      digitalWrite(WATER_FLOW_PIN, LOW);
+      waterFlowing = false;
+      containerHeight = 0; // Reset for next measurement
+      Serial.println("Pump OFF - Filling Complete (Confirmed)");
+    }
+  }
+
+  delay(500); // Check water level twice per second
+}
